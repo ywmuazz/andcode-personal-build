@@ -1,0 +1,98 @@
+name: AndCode personal release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: andcode-personal-release
+  cancel-in-progress: false
+
+env:
+  SOURCE_COMMIT: f6593e19b83db3161b55dcb1e978ea0f214417fa
+  TERMUX_PACKAGES_COMMIT: 2a342d4bd78454dd20760e1fded33939f1712b2d
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout build controls
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          path: controls
+      - name: Checkout audited source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: yuga-hashimoto/and-code
+          ref: f6593e19b83db3161b55dcb1e978ea0f214417fa
+          persist-credentials: false
+          path: source
+      - name: Checkout pinned Termux recipes
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: termux/termux-packages
+          ref: 2a342d4bd78454dd20760e1fded33939f1712b2d
+          persist-credentials: false
+          path: termux-packages
+      - name: Set up Java
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17.0.16+8'
+      - name: Build native payload and unsigned F-Droid release
+        env:
+          TERMUX_PACKAGES_DIR: ${{ github.workspace }}/termux-packages
+          CONTROL_COMMIT: ${{ github.sha }}
+          BUILD_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bash controls/scripts/build.sh
+      - name: Upload unsigned APK and build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: andcode-unsigned-${{ github.run_id }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 1
+
+  sign:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout signing controls only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          path: controls
+      - name: Set up Java
+        uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17.0.16+8'
+      - name: Download this run's unsigned build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: andcode-unsigned-${{ github.run_id }}
+          path: incoming
+      - name: Prepare APK tools before loading secrets
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;35.0.0'
+          python3 controls/scripts/verify_apk.py incoming/andcode-unsigned.apk --output incoming/unsigned-verification.json
+          (cd incoming && sha256sum --check unsigned.sha256)
+      - name: Sign and verify release
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.AND_CODE_SIGNING_P12_BASE64 }}
+          SIGNING_PASSWORD: ${{ secrets.AND_CODE_SIGNING_PASSWORD }}
+        run: bash controls/scripts/sign.sh
+      - name: Upload verified signed APK and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: andcode-signed-${{ github.run_id }}
+          path: delivery/
+          if-no-files-found: error
+          retention-days: 3
+

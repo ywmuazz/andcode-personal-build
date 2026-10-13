@@ -1,0 +1,5 @@
+// Record the Gradle version in the build log without changing upstream files.
+if (gradle.gradleVersion != '8.9') {
+    throw new GradleException('Expected Gradle 8.9')
+}
+
