@@ -2,6 +2,11 @@ name: AndCode personal release
 
 on:
   workflow_dispatch:
+    inputs:
+      unsigned_run_id:
+        description: 'Optional previous run ID: reuse its pinned, verified unsigned APK'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -16,6 +21,7 @@ env:
 
 jobs:
   build:
+    if: ${{ inputs.unsigned_run_id == '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -59,6 +65,10 @@ jobs:
 
   sign:
     needs: build
+    if: ${{ !cancelled() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.unsigned_run_id != '')) }}
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -75,18 +85,23 @@ jobs:
       - name: Download this run's unsigned build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: andcode-unsigned-${{ github.run_id }}
+          name: andcode-unsigned-${{ inputs.unsigned_run_id || github.run_id }}
           path: incoming
+          run-id: ${{ inputs.unsigned_run_id || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Prepare APK tools before loading secrets
         run: |
           set -euo pipefail
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'build-tools;35.0.0'
           python3 controls/scripts/verify_apk.py incoming/andcode-unsigned.apk --output incoming/unsigned-verification.json
           (cd incoming && sha256sum --check unsigned.sha256)
+          python3 controls/scripts/verify_build_record.py
       - name: Sign and verify release
         env:
           SIGNING_KEYSTORE_BASE64: ${{ secrets.AND_CODE_SIGNING_P12_BASE64 }}
           SIGNING_PASSWORD: ${{ secrets.AND_CODE_SIGNING_PASSWORD }}
+          SIGNING_CONTROL_COMMIT: ${{ github.sha }}
+          SIGNING_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: bash controls/scripts/sign.sh
       - name: Upload verified signed APK and evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -95,4 +110,3 @@ jobs:
           path: delivery/
           if-no-files-found: error
           retention-days: 3
-

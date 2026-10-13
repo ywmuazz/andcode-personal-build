@@ -27,12 +27,14 @@ cp incoming/build-record.json incoming/dependencies.txt incoming/native-packages
   incoming/termux_assets.lock.json incoming/ndk-source.properties delivery/
 cp controls/signing-certificate.pem delivery/
 python3 - <<'PY'
-import hashlib, json
+import hashlib, json, os
 from pathlib import Path
 out = Path('delivery')
 record = json.loads((out / 'build-record.json').read_text())
 record['signed_apk_sha256'] = hashlib.sha256((out / 'andcode-1.2.27-fdroid-personal.apk').read_bytes()).hexdigest()
 record['verification'] = json.loads((out / 'apk-verification.json').read_text())
+record['signing_workflow_commit'] = os.environ['SIGNING_CONTROL_COMMIT']
+record['signing_run_url'] = os.environ['SIGNING_RUN_URL']
 (out / 'build-record.json').write_text(json.dumps(record, indent=2) + '\n')
 PY
 (cd delivery && sha256sum andcode-1.2.27-fdroid-personal.apk > SHA256SUMS)

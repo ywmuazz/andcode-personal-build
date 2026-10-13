@@ -65,7 +65,10 @@ def main():
         "permissions": sorted(e.get(android + "name") for e in root if e.tag.startswith("uses-permission")),
     }
     if args.certificate:
-        verification = run(sdk / "build-tools/35.0.0/apksigner", "verify", "--verbose", "--print-certs", args.apk)
+        # Default verification starts at manifest minSdk=26, so v1 is skipped.
+        # Verify from API 23 to exercise v1 as well as v2/v3; this does not change
+        # the application's minimum supported Android version.
+        verification = run(sdk / "build-tools/35.0.0/apksigner", "verify", "--min-sdk-version", "23", "--verbose", "--print-certs", args.apk)
         actual = re.findall(r"Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)", verification)
         expected_cert = run("openssl", "x509", "-in", args.certificate, "-noout", "-fingerprint", "-sha256").strip().split("=", 1)[1].replace(":", "").lower()
         if len(actual) != 1 or actual[0].lower() != expected_cert:
@@ -84,4 +87,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

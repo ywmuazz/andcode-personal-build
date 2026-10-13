@@ -12,6 +12,11 @@ The native payload is built from Termux commit
 Actions are pinned to verified full commits. Signing keys are never part of the
 source, logs or artifacts. No release is automatically published.
 
+Leave `unsigned_run_id` empty for a full build. If only signing/verification
+failed, set it to the original run ID to reuse that run's unsigned artifact
+before it expires. Source commit, variant and APK checksum are rechecked
+before secrets are loaded. Build and signing run URLs are both recorded.
+
 The signed artifact expires after three days: download it and its build record.
 The certificate must match the local long-term signing key; retain a secure
 backup of the private key, PKCS#12 file and password for future updates.
