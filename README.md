@@ -1,8 +1,22 @@
 # AndCode personal cloud build
 
-This repository contains only build controls and a **public** signing certificate.
-The Android source is checked out unchanged from
-`yuga-hashimoto/and-code@f6593e19b83db3161b55dcb1e978ea0f214417fa`.
+This repository contains build controls, personal source patches, and a **public**
+signing certificate. The Android source is checked out from
+`yuga-hashimoto/and-code@f6593e19b83db3161b55dcb1e978ea0f214417fa`, then the
+patches in `patches/` are applied. Their SHA-256 hashes are recorded and checked
+before signing, including when reusing an unsigned artifact.
+
+The thread-resume patch restores an existing Codex thread before sending on the
+same app-server connection. This fixes continuing a saved chat after the backend
+restarts. A failed restore preserves the original error and does not create a new
+conversation; failed sends are not automatically replayed. The workflow runs the
+targeted JVM regression tests before assembling the release. Device verification
+is still required: finish a chat, force-stop the app, reopen that chat, then send
+a follow-up and check that the context is retained. Also check normal consecutive
+messages and two separate conversations.
+
+For the first patched build, leave `unsigned_run_id` empty. Artifacts from before
+the patch are deliberately rejected by the signing provenance check.
 
 Run **AndCode personal release** manually from Actions. The workflow builds an
 unsigned F-Droid variant on a standard Ubuntu 24.04 runner. A separate job signs

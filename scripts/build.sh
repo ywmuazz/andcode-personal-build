@@ -30,10 +30,18 @@ unzip -q "$source_root/build/android-ndk-r29-linux.zip" -d "$source_root/build"
 export TERMUX_PKG_MAKE_PROCESSES=2
 
 cd "$source_root"
+# Keep upstream pinned; apply the reviewed personal patches before compiling.
+git diff --exit-code
+git diff --cached --exit-code
+for source_patch in "$task_root"/controls/patches/*.patch; do
+  git apply --check --index "$source_patch"
+  git apply --index "$source_patch"
+done
+patched_source_tree="$(git write-tree)"
 bash scripts/build_android_runtime_native_debs.sh --no-android-setup --output-dir build/termux-debs
 
 # Run a copy of the audited wrapper with its official distribution checksum set.
-# The Gradle project is still the unchanged source in the current directory.
+# The Gradle project is the pinned source plus the recorded personal patches.
 wrapper_root="$RUNNER_TEMP/andcode-verified-wrapper"
 mkdir -p "$wrapper_root/gradle/wrapper"
 cp gradlew "$wrapper_root/gradlew"
@@ -42,7 +50,7 @@ printf '\ndistributionSha256Sum=d725d707bfabd4dfdc958c624003b3c80accc03f7037b512
 env -u GITHUB_CLIENT_ID bash "$wrapper_root/gradlew" --no-daemon \
   -Pandcode.fdroidBuild=true -Pandcode.sourceNativeLibs=true \
   --init-script "$task_root/controls/scripts/verify-gradle.init.gradle" \
-  :app:assembleFdroidRelease
+  :app:testFdroidDebugUnitTest --tests '*CodexThreadResumeTest' :app:assembleFdroidRelease
 test -f app/build/outputs/apk/fdroid/release/app-fdroid-release-unsigned.apk
 cp app/build/outputs/apk/fdroid/release/app-fdroid-release-unsigned.apk "$task_root/out/andcode-unsigned.apk"
 env -u GITHUB_CLIENT_ID bash "$wrapper_root/gradlew" --no-daemon \
@@ -53,7 +61,7 @@ if grep -Eq 'com\.google\.(firebase|android\.gms):' "$task_root/out/dependencies
   exit 1
 fi
 git diff --exit-code
-git diff --cached --exit-code
+test "$(git write-tree)" = "$patched_source_tree"
 find build/termux-debs -type f -name '*.deb' -print0 | sort -z | xargs -0 sha256sum > "$task_root/out/native-packages.sha256"
 cp runtime_tools/termux_assets.lock.json "$task_root/out/termux_assets.lock.json"
 cp "$NDK/source.properties" "$task_root/out/ndk-source.properties"

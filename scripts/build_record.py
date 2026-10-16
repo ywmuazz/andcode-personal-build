@@ -8,9 +8,14 @@ import sys
 from pathlib import Path
 
 out = Path(sys.argv[1])
+patch_dir = Path(__file__).resolve().parent.parent / "patches"
 record = {
     "source_repository": "https://github.com/yuga-hashimoto/and-code",
     "source_commit": os.environ["SOURCE_COMMIT"],
+    "source_patches": [
+        {"name": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+        for p in sorted(patch_dir.glob("*.patch"))
+    ],
     "workflow_commit": os.environ["CONTROL_COMMIT"],
     "run_url": os.environ["BUILD_RUN_URL"],
     "termux_commit": os.environ["TERMUX_PACKAGES_COMMIT"],

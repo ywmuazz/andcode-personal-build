@@ -1,0 +1,145 @@
+diff --git a/app/src/main/java/com/yugahashimoto/andcode/runtime/local/CodexRuntime.kt b/app/src/main/java/com/yugahashimoto/andcode/runtime/local/CodexRuntime.kt
+index 87b4339f..69db635f 100644
+--- a/app/src/main/java/com/yugahashimoto/andcode/runtime/local/CodexRuntime.kt
++++ b/app/src/main/java/com/yugahashimoto/andcode/runtime/local/CodexRuntime.kt
+@@ -377,7 +377,7 @@ class CodexRuntime(
+                 put("input", codexTurnInput(prompt, attachments))
+                 model?.takeIf(String::isNotBlank)?.let { put("model", JsonPrimitive(it)) }
+             }
+-        runCatching { call("turn/start", params) }
++        runCatching { ensureServer().startResumedTurn(params) }
+             .onSuccess { result ->
+                 // Recorded by turn id, not just session id, so onServerEnded can evict exactly this
+                 // turn's in-progress assistant message from CodexItemParser if the process dies
+diff --git a/app/src/main/java/com/yugahashimoto/andcode/runtime/local/CodexThreadResume.kt b/app/src/main/java/com/yugahashimoto/andcode/runtime/local/CodexThreadResume.kt
+new file mode 100644
+index 00000000..2e132d63
+--- /dev/null
++++ b/app/src/main/java/com/yugahashimoto/andcode/runtime/local/CodexThreadResume.kt
+@@ -0,0 +1,18 @@
++package com.yugahashimoto.andcode.runtime.local
++
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.buildJsonObject
++
++/**
++ * Stored threads survive app-server restarts, but loaded threads do not. thread/read and the
++ * UI's local message cache cannot restore them. Resume before sending; resuming an already
++ * loaded thread reuses it. Keep both requests on this exact client: using CodexRuntime.call
++ * twice could silently start a different server between resume and turn/start.
++ *
++ * Do not retry turn/start after a transport failure: it may already have executed the prompt.
++ */
++internal suspend fun CodexJsonRpcClient.startResumedTurn(params: JsonObject): JsonObject {
++    val threadId = requireNotNull(params["threadId"]) { "Missing threadId" }
++    call("thread/resume", buildJsonObject { put("threadId", threadId) })
++    return call("turn/start", params)
++}
+diff --git a/app/src/test/java/com/yugahashimoto/andcode/runtime/local/CodexThreadResumeTest.kt b/app/src/test/java/com/yugahashimoto/andcode/runtime/local/CodexThreadResumeTest.kt
+new file mode 100644
+index 00000000..583db1ad
+--- /dev/null
++++ b/app/src/test/java/com/yugahashimoto/andcode/runtime/local/CodexThreadResumeTest.kt
+@@ -0,0 +1,102 @@
++package com.yugahashimoto.andcode.runtime.local
++
++import kotlinx.coroutines.runBlocking
++import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonObject
++import kotlinx.serialization.json.JsonPrimitive
++import kotlinx.serialization.json.buildJsonObject
++import kotlinx.serialization.json.jsonObject
++import kotlinx.serialization.json.jsonPrimitive
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import java.io.ByteArrayOutputStream
++
++class CodexThreadResumeTest {
++    private val params = Json.parseToJsonElement(
++        """{"threadId":"saved-thread","input":[{"type":"text","text":"continue"}],"model":"chosen-model"}""",
++    ).jsonObject
++
++    /** Models persisted history with a fresh, empty set of in-memory threads per server. */
++    private class Server {
++        val methods = mutableListOf<String>()
++        val turns = mutableListOf<JsonObject>()
++        private val loaded = mutableSetOf<String>()
++        var resumeError: String? = null
++        var turnError: String? = null
++        lateinit var client: CodexJsonRpcClient
++
++        init {
++            val output = object : ByteArrayOutputStream() {
++                override fun flush() {
++                    val request = Json.parseToJsonElement(toString("UTF-8").trim()).jsonObject
++                    reset()
++                    val method = request.getValue("method").jsonPrimitive.content
++                    val body = request.getValue("params").jsonObject
++                    val id = body.getValue("threadId").jsonPrimitive.content
++                    methods += method
++                    val error = when (method) {
++                        "thread/resume" -> resumeError.also { if (it == null) loaded += id }
++                        "turn/start" -> {
++                            if (id !in loaded) "thread not found: $id" else {
++                                turns += body
++                                turnError
++                            }
++                        }
++                        else -> error("Unexpected method: $method")
++                    }
++                    client.receiveLine(buildJsonObject {
++                        put("id", request.getValue("id"))
++                        if (error != null) {
++                            put("error", buildJsonObject {
++                                put("code", JsonPrimitive(-32600))
++                                put("message", JsonPrimitive(error))
++                            })
++                        } else {
++                            put("result", JsonObject(emptyMap()))
++                        }
++                    }.toString())
++                }
++            }
++            client = CodexJsonRpcClient(output, onNotification = { _, _ -> })
++        }
++    }
++
++    @Test
++    fun `old send fails on a fresh server but resumed send continues the same thread`() = runBlocking {
++        val beforeRestart = Server()
++        beforeRestart.client.startResumedTurn(params)
++        val afterRestart = Server()
++        val oldError = runCatching { afterRestart.client.call("turn/start", params) }.exceptionOrNull()
++        assertTrue(oldError is CodexJsonRpcClient.RpcError)
++        assertEquals("thread not found: saved-thread", oldError?.message)
++        afterRestart.client.startResumedTurn(params)
++        assertEquals(listOf(params), afterRestart.turns)
++    }
++
++    @Test
++    fun `already loaded conversations continue without changing the prompt model or thread`() = runBlocking {
++        val server = Server()
++        repeat(2) { server.client.startResumedTurn(params) }
++        assertEquals(listOf(params, params), server.turns)
++        assertEquals(listOf("thread/resume", "turn/start", "thread/resume", "turn/start"), server.methods)
++    }
++
++    @Test
++    fun `failed resume never sends or creates a replacement conversation`() = runBlocking {
++        val server = Server().apply { resumeError = "stored thread missing" }
++        val failure = runCatching { server.client.startResumedTurn(params) }.exceptionOrNull()
++        assertEquals("stored thread missing", failure?.message)
++        assertEquals(listOf("thread/resume"), server.methods)
++        assertTrue(server.turns.isEmpty())
++    }
++
++    @Test
++    fun `a failed turn is not automatically executed twice`() = runBlocking {
++        val server = Server().apply { turnError = "server stopped" }
++        val failure = runCatching { server.client.startResumedTurn(params) }.exceptionOrNull()
++        assertEquals("server stopped", failure?.message)
++        assertEquals(listOf(params), server.turns)
++        assertEquals(listOf("thread/resume", "turn/start"), server.methods)
++    }
++}

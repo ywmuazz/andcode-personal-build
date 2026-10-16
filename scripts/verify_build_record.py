@@ -7,9 +7,14 @@ from pathlib import Path
 
 incoming = Path("incoming")
 record = json.loads((incoming / "build-record.json").read_text())
+patch_dir = Path(__file__).resolve().parent.parent / "patches"
 expected = {
     "source_repository": "https://github.com/yuga-hashimoto/and-code",
     "source_commit": os.environ["SOURCE_COMMIT"],
+    "source_patches": [
+        {"name": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+        for p in sorted(patch_dir.glob("*.patch"))
+    ],
     "termux_commit": os.environ["TERMUX_PACKAGES_COMMIT"],
     "variant": "fdroidRelease",
     "gradle": "8.9",
